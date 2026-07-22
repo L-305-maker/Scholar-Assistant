@@ -32,12 +32,44 @@ class QualityGate:
         for evidence_id in claim.supporting_evidence_ids:
             self._validate_evidence_location(self.evidence[evidence_id])
 
+        if claim.type == ClaimType.CROSS_PAPER_SYNTHESIS:
+            work_ids = {
+                self.evidence[evidence_id].work_id for evidence_id in claim.supporting_evidence_ids
+            }
+            if len(work_ids) < 2:
+                msg = "cross_paper_synthesis requires evidence from at least two independent works"
+                raise QualityGateError(msg)
+            if not claim.scope:
+                msg = "cross_paper_synthesis requires an explicit scope"
+                raise QualityGateError(msg)
+
+        if claim.type == ClaimType.AGENT_INFERENCE:
+            claim.metadata["explicit_inference"] = True
+            if not claim.supporting_evidence_ids and not claim.counter_evidence_ids:
+                claim.support_status = SupportStatus.INSUFFICIENT_EVIDENCE
+
+        if claim.type == ClaimType.RESEARCH_HYPOTHESIS:
+            if not claim.metadata.get("falsification_condition"):
+                msg = "research_hypothesis claims require a falsification condition"
+                raise QualityGateError(msg)
+            if not claim.metadata.get("generated_queries"):
+                msg = "research_hypothesis claims require generated verification queries"
+                raise QualityGateError(msg)
+
         if (
             _is_direct_ranking_claim(claim)
-            and claim.metadata.get("experiment_conditions") != "comparable"
+            and not _has_comparable_experiment_metadata(claim)
         ):
             msg = "Direct superiority ranking requires comparable experiment conditions"
             raise QualityGateError(msg)
+
+        if claim.supporting_evidence_ids and all(
+            self.evidence[evidence_id].source_type.value == "abstract_only"
+            for evidence_id in claim.supporting_evidence_ids
+        ):
+            claim.confidence = min(claim.confidence, 0.55)
+            if claim.support_status == SupportStatus.VERIFIED:
+                claim.support_status = SupportStatus.PARTIALLY_SUPPORTED
 
         if (
             claim.type == ClaimType.RESEARCH_HYPOTHESIS
@@ -88,3 +120,19 @@ def _is_direct_ranking_claim(claim: Claim) -> bool:
         "最优",
     ]
     return any(term in content for term in ranking_terms)
+
+
+def _has_comparable_experiment_metadata(claim: Claim) -> bool:
+    if claim.metadata.get("experiment_conditions") == "comparable":
+        return True
+    comparability = claim.metadata.get("comparability") or {}
+    if not isinstance(comparability, dict):
+        return False
+    blocking_keys = [
+        "base_model",
+        "dataset",
+        "metric",
+        "inference_budget",
+        "training_data",
+    ]
+    return bool(comparability) and all(comparability.get(key) == "same" for key in blocking_keys)

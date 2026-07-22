@@ -19,7 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 ml = [
     "FlagEmbedding>=1.2.10",
-    "torch>=2.2.0",
+    "torch>=2.7,<2.8",
+    "transformers>=4.40,<5",
+]
+retrieval = [
+    "FlagEmbedding>=1.2.10",
+    "torch>=2.7,<2.8",
+    "transformers>=4.40,<5",
 ]
 
 [project.scripts]
@@ -43,6 +49,10 @@ packages = ["src/scholar_assistant"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "model: tests that load real Hugging Face retrieval models and require SCHOLAR_RUN_MODEL_TESTS=1",
+    "live: tests that call real external APIs and require SCHOLAR_RUN_LIVE_TESTS=1",
+]
 
 [tool.ruff]
 line-length = 100

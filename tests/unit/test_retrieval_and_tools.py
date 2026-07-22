@@ -90,6 +90,9 @@ def test_searcher_dense_retrieval_path_persists_index(
     class FakeEmbedder:
         available = True
 
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
         def encode(self, texts: list[str]) -> np.ndarray:
             vectors = np.zeros((len(texts), 2), dtype=np.float32)
             vectors[0] = [1.0, 0.0]
@@ -101,6 +104,9 @@ def test_searcher_dense_retrieval_path_persists_index(
 
     class FakeReranker:
         available = False
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
 
     ensure_project_layout(tmp_path)
     monkeypatch.setattr(searcher_module, "BGEM3Embedder", FakeEmbedder)

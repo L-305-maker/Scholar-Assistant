@@ -54,6 +54,7 @@ Copy `.env.example` into your shell or local secret manager. Do not write real k
 ```bash
 export DEEPSEEK_API_KEY=
 export MOONSHOT_API_KEY=
+export SEMANTIC_SCHOLAR_API_KEY=
 export HF_TOKEN=
 ```
 
@@ -90,9 +91,9 @@ uv run scholar doctor
 uv run scholar config show
 uv run scholar providers list
 uv run scholar providers test deepseek
-uv run scholar search "LLM agent long-term memory retrieval noise" --no-embeddings
+uv run scholar search "LLM agent long-term memory retrieval noise" --sources arxiv,openalex --no-embeddings
 uv run scholar read papers/example.pdf
-uv run scholar research "调研 LLM Agent 长期记忆中的检索噪声问题" --no-embeddings
+uv run scholar research "调研 LLM Agent 长期记忆中的检索噪声问题" --sources arxiv,openalex,crossref,semantic-scholar --no-embeddings
 uv run scholar status
 uv run scholar export reports/latest-report.md
 ```
@@ -120,8 +121,10 @@ SQLite FTS5 BM25
 Optional ML retrieval:
 
 ```bash
-uv sync --extra ml
+uv sync --extra retrieval
 ```
+
+The older `ml` extra is still supported for compatibility.
 
 When `FlagEmbedding` and local model files are available, the code can use:
 
@@ -132,11 +135,33 @@ BAAI/bge-reranker-v2-m3 for final reranking
 
 Models are lazy-loaded. CLI startup does not load BGE models. Use `--no-embeddings` to force BM25-only mode.
 
-## arXiv And Offline Behavior
+Model smoke tests are explicit:
 
-`scholar search` and `scholar research` use the arXiv Atom API by default. Network tests use fixtures and mocks.
+```bash
+SCHOLAR_RUN_MODEL_TESTS=1 uv run pytest -m model
+uv run python scripts/retrieval_smoke.py
+```
 
-If live arXiv is unavailable, the MVP can complete the vertical smoke path with explicitly marked offline demo metadata. Reports warn that demo metadata is not verified bibliographic evidence.
+Without `SCHOLAR_RUN_MODEL_TESTS=1`, model tests skip instead of downloading models.
+
+## Multi-Source Search And Offline Behavior
+
+`scholar search` and `scholar research` use enabled source configuration by default:
+
+- arXiv
+- OpenAlex
+- Crossref
+- Semantic Scholar
+
+Each source has independent timeout, retry, max-results, and weight configuration under `[sources.<name>]`. A failing source emits a warning and does not fail the whole search. Network tests use fixtures and mocks by default.
+
+If live sources are unavailable, the MVP can complete the vertical smoke path with explicitly marked offline demo metadata. Reports warn that demo metadata is not verified bibliographic evidence.
+
+Live API tests are opt-in:
+
+```bash
+SCHOLAR_RUN_LIVE_TESTS=1 uv run pytest -m live
+```
 
 ## PDF Reading
 
@@ -172,6 +197,12 @@ List exposed tools without starting stdio:
 uv run scholar mcp-server --list-tools
 ```
 
+Run a real stdio initialize/list/call smoke test:
+
+```bash
+uv run python scripts/mcp_stdio_smoke.py
+```
+
 Exposed MCP tools:
 
 - `scholar_search_papers`
@@ -192,6 +223,7 @@ Exposed MCP tools:
 - Google Scholar is not scraped.
 - Arbitrary shell execution is not exposed by CLI exec or MCP.
 - External URL access is limited to registered data-source clients.
+- MCP output paths are constrained to the selected project path by default.
 - No full-text paper is marked as deeply read unless parsing actually succeeds.
 - Agent inference is never written as a paper fact.
 
@@ -210,10 +242,10 @@ BGE unavailable:
 retrieval_mode: bm25+optional-ml-unavailable
 ```
 
-No arXiv network:
+No source network:
 
 ```text
-warning: No live arXiv results were available; using explicitly marked offline demo metadata.
+warning: No live source results were available; using marked offline demo metadata.
 ```
 
 ## Data Outputs
@@ -229,5 +261,6 @@ papers.json
 evidence.json
 claims.json
 hypotheses.json
+run-manifest.json
 report.md
 ```

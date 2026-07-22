@@ -48,6 +48,7 @@ async def test_orchestrator_offline_research_resume_and_report(
     async def fail_search(self: ArxivClient, query: str, *, max_results: int = 25, start: int = 0):
         raise httpx.ConnectError("offline")
 
+    monkeypatch.setenv("SCHOLAR_DEMO_MODE", "1")
     monkeypatch.setattr(ArxivClient, "search", fail_search)
     result = await ResearchOrchestrator(tmp_path).run_research(
         "调研 LLM Agent 长期记忆中的检索噪声问题",
@@ -68,6 +69,24 @@ async def test_orchestrator_offline_research_resume_and_report(
     resumed = ResearchOrchestrator(tmp_path).get_run(result.run_id)
     assert resumed
     assert resumed["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_budget_exhausted_saves_partial_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCHOLAR_DEMO_MODE", "1")
+    result = await ResearchOrchestrator(tmp_path).run_research(
+        "memory retrieval",
+        no_embeddings=True,
+        max_candidates=0,
+    )
+    assert result.status.value == "BUDGET_EXHAUSTED"
+    assert (result.run_path / "run-manifest.json").exists()
+    resumed = ResearchOrchestrator(tmp_path).get_run(result.run_id)
+    assert resumed
+    assert resumed["status"] == "BUDGET_EXHAUSTED"
 
 
 def test_mcp_tool_registry_is_serializable() -> None:

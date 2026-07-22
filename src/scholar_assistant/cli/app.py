@@ -19,12 +19,14 @@ from scholar_assistant.cli.rendering import (
     stderr_console,
     stdout_console,
 )
+from scholar_assistant.core.budget import BudgetManager
 from scholar_assistant.core.config import ScholarSettings
 from scholar_assistant.core.events import EventSink
 from scholar_assistant.core.orchestrator import ResearchOrchestrator
 from scholar_assistant.providers.base import ModelMessage, ModelRequest, ProviderError
 from scholar_assistant.providers.router import ModelRouter
 from scholar_assistant.retrieval.embeddings import BGEM3Embedder
+from scholar_assistant.retrieval.model_smoke import run_retrieval_smoke
 from scholar_assistant.retrieval.reranker import BGEReranker
 from scholar_assistant.schemas.events import RunEvent, RunEventType
 from scholar_assistant.storage.database import Database
@@ -58,6 +60,7 @@ def init(project_path: Annotated[Path, typer.Option("--project-path", "-p")] = P
 @app.command()
 def doctor(
     project_path: Annotated[Path, typer.Option("--project-path", "-p")] = Path.cwd(),
+    deep: Annotated[bool, typer.Option("--deep")] = False,
 ) -> None:
     """Check local runtime, optional ML dependencies, and SQLite FTS5."""
     project = _project_path(project_path)
@@ -71,8 +74,33 @@ def doctor(
         checks.append(("sqlite_fts5", "ok"))
     except sqlite3.Error as exc:
         checks.append(("sqlite_fts5", f"failed: {exc}"))
-    checks.append(("bge_m3", "available" if BGEM3Embedder().available else "not installed"))
-    checks.append(("bge_reranker", "available" if BGEReranker().available else "not installed"))
+    embedder = BGEM3Embedder()
+    checks.append(
+        (
+            "bge_m3",
+            "available"
+            if embedder.available
+            else f"unavailable: {embedder.metadata.get('availability_error', 'not installed')}",
+        )
+    )
+    reranker = BGEReranker()
+    checks.append(
+        (
+            "bge_reranker",
+            "available"
+            if reranker.available
+            else f"unavailable: {reranker.metadata.get('availability_error', 'not installed')}",
+        )
+    )
+    checks.append(
+        (
+            "sources",
+            ",".join(
+                f"{name}:{'enabled' if config.enabled else 'disabled'}"
+                for name, config in settings.sources.items()
+            ),
+        )
+    )
     try:
         import fitz  # noqa: F401
 
@@ -92,6 +120,9 @@ def doctor(
     ]
     if missing_keys:
         stdout_console.print(f"missing_api_keys: {', '.join(sorted(missing_keys))}")
+    if deep:
+        smoke = run_retrieval_smoke(settings, allow_model_download=False)
+        stdout_console.print_json(json.dumps(smoke, ensure_ascii=False, default=str))
 
 
 @config_app.command("show")
@@ -179,8 +210,9 @@ def search(
     project_path: Annotated[Path, typer.Option("--project-path", "-p")] = Path.cwd(),
     max_results: Annotated[int, typer.Option("--max-results")] = 20,
     no_embeddings: Annotated[bool, typer.Option("--no-embeddings")] = False,
+    sources: Annotated[str | None, typer.Option("--sources")] = None,
 ) -> None:
-    """Search arXiv and store selected papers."""
+    """Search configured literature sources and store selected papers."""
     project = _project_path(project_path)
     ensure_project_layout(project)
     run_id = "search_cli"
@@ -190,7 +222,10 @@ def search(
         searcher = Searcher(repository, ScholarSettings.load(project), project, sink, run_id=run_id)
         result = asyncio.run(
             searcher.search(
-                question, max_results_per_query=max_results, no_embeddings=no_embeddings
+                question,
+                max_results_per_query=max_results,
+                no_embeddings=no_embeddings,
+                sources=_parse_sources(sources),
             )
         )
     for warning in result.warnings:
@@ -211,7 +246,14 @@ def read(
     with Database(project / ".scholar" / "state.db") as connection:
         repository = ScholarRepository(connection)
         sink = EventSink(project / ".scholar" / "runs" / run_id / "events.jsonl")
-        reader = Reader(repository, project, sink, run_id=run_id)
+        settings = ScholarSettings.load(project)
+        reader = Reader(
+            repository,
+            project,
+            sink,
+            run_id=run_id,
+            budget_manager=BudgetManager(settings.budget),
+        )
         evidence = asyncio.run(reader.read_paper(paper_id_or_pdf))
     stdout_console.print_json(json.dumps([item.model_dump(mode="json") for item in evidence]))
 
@@ -236,12 +278,21 @@ def research(
     question: str,
     project_path: Annotated[Path, typer.Option("--project-path", "-p")] = Path.cwd(),
     no_embeddings: Annotated[bool, typer.Option("--no-embeddings")] = False,
+    sources: Annotated[str | None, typer.Option("--sources")] = None,
+    max_candidates: Annotated[int | None, typer.Option("--max-candidates")] = None,
+    max_deep_reads: Annotated[int | None, typer.Option("--max-deep-reads")] = None,
 ) -> None:
     """Run Search -> Read -> Think -> Verify -> Report."""
     project = _project_path(project_path)
     stderr_console.print("running research workflow")
     result = asyncio.run(
-        ResearchOrchestrator(project).run_research(question, no_embeddings=no_embeddings)
+        ResearchOrchestrator(project).run_research(
+            question,
+            no_embeddings=no_embeddings,
+            sources=_parse_sources(sources),
+            max_candidates=max_candidates,
+            max_deep_reads=max_deep_reads,
+        )
     )
     for warning in result.warnings:
         stderr_console.print(f"warning: {warning}")
@@ -344,6 +395,12 @@ def mcp_server(
 
 def main() -> None:
     app()
+
+
+def _parse_sources(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 if __name__ == "__main__":

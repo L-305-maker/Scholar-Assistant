@@ -48,6 +48,13 @@ class ScholarlyWork(BaseModel):
     source_ids: dict[str, str] = Field(default_factory=dict)
     canonical_version_id: str | None = None
     latest_version_id: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    identifiers: dict[str, str | None] = Field(default_factory=dict)
+    metadata_provenance: dict[str, str] = Field(default_factory=dict)
+    retrieval_provenance: list[dict[str, Any]] = Field(default_factory=list)
+    merge_reasons: list[str] = Field(default_factory=list)
+    merge_confidence: float = 1.0
+    conflicts: list[str] = Field(default_factory=list)
 
 
 class Paper(BaseModel):
@@ -65,6 +72,7 @@ class Paper(BaseModel):
     categories: list[str] = Field(default_factory=list)
     source: str = "unknown"
     pdf_url: str | None = None
+    retrieval_provenance: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

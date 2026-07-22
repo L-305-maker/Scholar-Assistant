@@ -8,6 +8,7 @@ from scholar_assistant.agents.analyst import Analyst
 from scholar_assistant.agents.reader import Reader
 from scholar_assistant.agents.searcher import Searcher
 from scholar_assistant.agents.verifier import Verifier
+from scholar_assistant.core.budget import BudgetLimitExceeded, BudgetManager
 from scholar_assistant.core.config import ScholarSettings
 from scholar_assistant.core.events import EventSink
 from scholar_assistant.core.reporting import render_report
@@ -61,12 +62,21 @@ class ResearchOrchestrator:
         *,
         run_id: str | None = None,
         no_embeddings: bool = False,
+        sources: list[str] | None = None,
+        max_candidates: int | None = None,
+        max_deep_reads: int | None = None,
     ) -> ResearchRunResult:
         run_id = run_id or f"run_{uuid4().hex[:12]}"
         path = run_dir(self.project_path, run_id)
         event_sink = EventSink(path / "events.jsonl")
         machine = ResearchStateMachine()
         warnings: list[str] = []
+        settings = self.settings.model_copy(deep=True)
+        if max_candidates is not None:
+            settings.budget.max_raw_candidates = max_candidates
+        if max_deep_reads is not None:
+            settings.budget.max_deep_read = max_deep_reads
+        budget_manager = BudgetManager(settings.budget)
         with self.database as connection:
             repository = ScholarRepository(connection)
             repository.save_run(
@@ -114,9 +124,17 @@ class ResearchOrchestrator:
                 machine.transition(ResearchState.SEARCHING)
                 emit_task_event(RunEventType.TASK_STARTED, "search", "Searcher")
                 searcher = Searcher(
-                    repository, self.settings, self.project_path, event_sink, run_id=run_id
+                    repository,
+                    settings,
+                    self.project_path,
+                    event_sink,
+                    run_id=run_id,
+                    budget_manager=budget_manager,
+                    enabled_sources=sources,
                 )
-                search_result = await searcher.search(question, no_embeddings=no_embeddings)
+                search_result = await searcher.search(
+                    question, no_embeddings=no_embeddings, sources=sources
+                )
                 warnings.extend(search_result.warnings)
                 for warning in search_result.warnings:
                     event_sink.emit(
@@ -158,9 +176,21 @@ class ResearchOrchestrator:
                 machine.transition(ResearchState.SCREENING)
                 machine.transition(ResearchState.READING)
                 emit_task_event(RunEventType.TASK_STARTED, "read", "Reader")
-                reader = Reader(repository, self.project_path, event_sink, run_id=run_id)
+                reader = Reader(
+                    repository,
+                    self.project_path,
+                    event_sink,
+                    run_id=run_id,
+                    budget_manager=budget_manager,
+                )
                 evidence_units: list[EvidenceUnit] = []
-                for paper in search_result.papers[: self.settings.budget.max_deep_read]:
+                for paper in search_result.papers[: settings.budget.max_deep_read]:
+                    if budget_manager.deep_reads >= settings.budget.max_deep_read:
+                        raise BudgetLimitExceeded(
+                            "deep read budget exhausted",
+                            counter="deep_reads",
+                        )
+                    budget_manager.deep_reads += 1
                     evidence_units.extend(await reader.read_paper(paper, max_paragraphs=3))
                 emit_task_event(
                     RunEventType.TASK_COMPLETED,
@@ -175,8 +205,8 @@ class ResearchOrchestrator:
                 claims, hypotheses = analyst.analyze(
                     evidence_units,
                     question=question,
-                    max_claims=self.settings.budget.max_core_claims,
-                    max_hypotheses=self.settings.budget.max_hypotheses,
+                    max_claims=settings.budget.max_core_claims,
+                    max_hypotheses=settings.budget.max_hypotheses,
                 )
                 emit_task_event(
                     RunEventType.TASK_COMPLETED,
@@ -223,6 +253,36 @@ class ResearchOrchestrator:
                     retrieval_mode=search_result.retrieval_mode,
                     warnings=warnings,
                     query_plan=search_result.query_plan,
+                    budget_manager=budget_manager,
+                    source_stats=search_result.source_stats,
+                )
+            except BudgetLimitExceeded as exc:
+                machine.state = ResearchState.BUDGET_EXHAUSTED
+                warning = f"Budget exhausted: {exc}"
+                warnings.append(warning)
+                event_sink.emit(
+                    RunEvent.new(
+                        RunEventType.WARNING,
+                        run_id=run_id,
+                        payload={"message": warning, "counter": exc.counter},
+                    )
+                )
+                flush_events()
+                return self._finalize(
+                    repository=repository,
+                    event_sink=event_sink,
+                    machine=machine,
+                    run_id=run_id,
+                    question=question,
+                    run_path=path,
+                    papers=[],
+                    evidence_units=[],
+                    claims=[],
+                    hypotheses=[],
+                    retrieval_mode="budget-exhausted",
+                    warnings=warnings,
+                    budget_manager=budget_manager,
+                    source_stats={},
                 )
             except Exception as exc:
                 machine.state = ResearchState.FAILED
@@ -258,6 +318,8 @@ class ResearchOrchestrator:
         retrieval_mode: str,
         warnings: list[str],
         query_plan: object | None = None,
+        budget_manager: BudgetManager | None = None,
+        source_stats: dict[str, dict[str, object]] | None = None,
     ) -> ResearchRunResult:
         completed = event_sink.emit(
             RunEvent.new(
@@ -289,6 +351,29 @@ class ResearchOrchestrator:
             run_path / "hypotheses.json",
             [hypothesis.model_dump(mode="json") for hypothesis in hypotheses],
         )
+        manifest = {
+            "run_id": run_id,
+            "project_path": str(self.project_path),
+            "question": question,
+            "status": machine.state.value,
+            "retrieval_mode": retrieval_mode,
+            "enabled_sources": sorted((source_stats or {}).keys()),
+            "source_stats": source_stats or {},
+            "budget_usage": budget_manager.snapshot() if budget_manager else {},
+            "warnings": warnings,
+            "artifacts": {
+                "events": str(run_path / "events.jsonl"),
+                "report": str(run_path / "report.md"),
+                "papers": str(run_path / "papers.json"),
+                "evidence": str(run_path / "evidence.json"),
+                "claims": str(run_path / "claims.json"),
+                "hypotheses": str(run_path / "hypotheses.json"),
+            },
+        }
+        write_json(run_path / "run-manifest.json", manifest)
+        repository.save_run_manifest(run_id, manifest)
+        if budget_manager:
+            repository.save_budget_usage(run_id, budget_manager.snapshot())
         if query_plan is not None:
             report = render_report(
                 question=question,

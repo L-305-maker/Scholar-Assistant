@@ -28,6 +28,31 @@ class ModelConfig(BaseModel):
     preserve_provider_state: bool = False
 
 
+class SourceConfig(BaseModel):
+    enabled: bool = True
+    max_results: int = Field(default=100, ge=1)
+    timeout_seconds: float = Field(default=30.0, gt=0)
+    max_retries: int = Field(default=1, ge=0)
+    weight: float = Field(default=1.0, gt=0)
+    api_key_env: str | None = None
+    ttl_seconds: int = Field(default=86_400, ge=0)
+
+    @property
+    def has_api_key(self) -> bool:
+        return bool(self.api_key_env and os.environ.get(self.api_key_env))
+
+
+class RetrievalModelConfig(BaseModel):
+    bge_m3_model: str = "BAAI/bge-m3"
+    bge_reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    model_revision: str | None = None
+    device: str = "auto"
+    cache_dir: Path | None = None
+    batch_size: int = Field(default=8, ge=1)
+    max_length: int = Field(default=8192, ge=1)
+    allow_cpu_fallback: bool = True
+
+
 class BudgetConfig(BaseModel):
     main_search_loops: int = 2
     verification_search_loops: int = 1
@@ -37,6 +62,17 @@ class BudgetConfig(BaseModel):
     max_deep_read: int = 10
     max_core_claims: int = 30
     max_hypotheses: int = 5
+    max_search_calls: int = 64
+    max_source_calls_per_source: int = 32
+    max_pdf_downloads: int = 20
+    max_pdf_parses: int = 20
+    max_dense_retrievals: int = 8
+    max_reranker_documents: int = 100
+    max_mcp_tool_calls: int = 64
+    max_model_requests: int = 32
+    max_retries: int = 32
+    max_input_tokens: int = 250_000
+    max_output_tokens: int = 50_000
 
 
 class ScholarSettings(BaseModel):
@@ -46,6 +82,8 @@ class ScholarSettings(BaseModel):
     demo_mode: bool = False
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     models: dict[str, ModelConfig] = Field(default_factory=dict)
+    sources: dict[str, SourceConfig] = Field(default_factory=dict)
+    retrieval: RetrievalModelConfig = Field(default_factory=RetrievalModelConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @classmethod
@@ -59,6 +97,17 @@ class ScholarSettings(BaseModel):
                 "kimi": ProviderConfig(
                     base_url="https://api.moonshot.cn/v1",
                     api_key_env="MOONSHOT_API_KEY",
+                ),
+            },
+            sources={
+                "arxiv": SourceConfig(max_results=100, timeout_seconds=30.0, weight=1.2),
+                "openalex": SourceConfig(max_results=100, timeout_seconds=30.0, weight=0.9),
+                "crossref": SourceConfig(max_results=50, timeout_seconds=30.0, weight=0.6),
+                "semantic_scholar": SourceConfig(
+                    max_results=100,
+                    timeout_seconds=30.0,
+                    weight=1.0,
+                    api_key_env="SEMANTIC_SCHOLAR_API_KEY",
                 ),
             },
             models={
@@ -112,6 +161,54 @@ max_core_papers = 15
 max_deep_read = 10
 max_core_claims = 30
 max_hypotheses = 5
+max_search_calls = 64
+max_source_calls_per_source = 32
+max_pdf_downloads = 20
+max_pdf_parses = 20
+max_dense_retrievals = 8
+max_reranker_documents = 100
+max_mcp_tool_calls = 64
+max_model_requests = 32
+max_retries = 32
+max_input_tokens = 250000
+max_output_tokens = 50000
+
+[retrieval]
+bge_m3_model = "BAAI/bge-m3"
+bge_reranker_model = "BAAI/bge-reranker-v2-m3"
+device = "auto"
+batch_size = 8
+max_length = 8192
+allow_cpu_fallback = true
+
+[sources.arxiv]
+enabled = true
+max_results = 100
+timeout_seconds = 30
+max_retries = 1
+weight = 1.2
+
+[sources.openalex]
+enabled = true
+max_results = 100
+timeout_seconds = 30
+max_retries = 1
+weight = 0.9
+
+[sources.crossref]
+enabled = true
+max_results = 50
+timeout_seconds = 30
+max_retries = 1
+weight = 0.6
+
+[sources.semantic_scholar]
+enabled = true
+max_results = 100
+timeout_seconds = 30
+max_retries = 1
+weight = 1.0
+api_key_env = "SEMANTIC_SCHOLAR_API_KEY"
 
 [providers.deepseek]
 type = "openai-compatible"

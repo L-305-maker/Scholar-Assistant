@@ -8,8 +8,11 @@ from scholar_assistant.schemas.paper import Paper
 class OpenAlexClient:
     base_url = "https://api.openalex.org/works"
 
+    def __init__(self, timeout_seconds: float = 30.0) -> None:
+        self.timeout_seconds = timeout_seconds
+
     async def search(self, query: str, *, max_results: int = 20) -> list[Paper]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.get(
                 self.base_url, params={"search": query, "per-page": max_results}
             )

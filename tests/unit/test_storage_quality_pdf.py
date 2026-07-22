@@ -6,6 +6,8 @@ import fitz
 import pytest
 
 from scholar_assistant.agents.reader import Reader
+from scholar_assistant.core.budget import BudgetManager
+from scholar_assistant.core.config import BudgetConfig
 from scholar_assistant.core.events import EventSink
 from scholar_assistant.core.quality_gate import QualityGate, QualityGateError
 from scholar_assistant.schemas.evidence import (
@@ -15,7 +17,7 @@ from scholar_assistant.schemas.evidence import (
     EvidenceUnit,
     SourceType,
 )
-from scholar_assistant.schemas.paper import Paper, PaperVersion, VersionType
+from scholar_assistant.schemas.paper import AccessType, Paper, PaperVersion, VersionType
 from scholar_assistant.storage.database import Database
 from scholar_assistant.storage.files import ensure_project_layout, sha256_text
 from scholar_assistant.storage.repositories import ScholarRepository
@@ -31,6 +33,37 @@ def test_storage_init_crud_and_idempotent_migration(tmp_path: Path) -> None:
     with Database(db_path) as connection:
         repository = ScholarRepository(connection)
         assert repository.get_paper(paper.work_id) is not None
+
+
+def test_old_schema_v1_upgrades_to_v2(tmp_path: Path) -> None:
+    import sqlite3
+
+    db_path = tmp_path / "state.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT)"
+        )
+        connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (1, '')")
+        connection.execute(
+            """
+            CREATE TABLE works (
+                work_id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                doi TEXT,
+                arxiv_id TEXT,
+                normalized_title TEXT NOT NULL UNIQUE
+            )
+            """
+        )
+    with Database(db_path) as connection:
+        versions = [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )
+        ]
+        assert versions == [1, 2]
+        connection.execute("SELECT 1 FROM retrieval_provenance LIMIT 1")
 
 
 def test_evidence_claim_relation_and_quality_gate() -> None:
@@ -109,9 +142,67 @@ async def test_reader_extracts_pdf_evidence_with_page(tmp_path: Path) -> None:
 
     with Database(tmp_path / ".scholar" / "state.db") as connection:
         repository = ScholarRepository(connection)
-        reader = Reader(repository, tmp_path, EventSink(), run_id="test")
+        budget = BudgetManager(BudgetConfig())
+        reader = Reader(repository, tmp_path, EventSink(), run_id="test", budget_manager=budget)
         evidence = await reader.read_paper(pdf_path)
+        tool_rows = connection.execute(
+            "SELECT tool_name, status FROM tool_executions ORDER BY started_at"
+        ).fetchall()
 
     assert evidence
     assert evidence[0].page == 1
     assert evidence[0].source_type == SourceType.PDF_FULLTEXT
+    assert budget.snapshot()["counters"]["pdf_parses"] == 1
+    assert [row["tool_name"] for row in tool_rows] == ["pdf.parse"]
+    assert tool_rows[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reader_uses_cached_pdf_without_download_budget(tmp_path: Path) -> None:
+    ensure_project_layout(tmp_path)
+    pdf_path = tmp_path / "papers" / "2401.00001.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text(
+        (72, 72),
+        "Method\n"
+        "This cached paper studies LLM agent long-term memory retrieval noise "
+        "with evidence-grounded reading.",
+    )
+    document.save(pdf_path)
+    document.close()
+
+    with Database(tmp_path / ".scholar" / "state.db") as connection:
+        repository = ScholarRepository(connection)
+        paper = repository.upsert_paper(
+            Paper(
+                title="Cached Memory Retrieval Paper",
+                abstract="Cached abstract.",
+                arxiv_id="2401.00001",
+                pdf_url="https://example.test/paper.pdf",
+            )
+        )
+        repository.upsert_version(
+            PaperVersion(
+                work_id=paper.work_id,
+                version_type=VersionType.ARXIV,
+                source_url=paper.pdf_url,
+                access_type=AccessType.FULLTEXT,
+            )
+        )
+        budget = BudgetManager(BudgetConfig(max_pdf_downloads=0))
+        reader = Reader(repository, tmp_path, EventSink(), run_id="cache", budget_manager=budget)
+        evidence = await reader.read_paper(paper)
+        tool_names = [
+            row["tool_name"]
+            for row in connection.execute(
+                "SELECT tool_name FROM tool_executions ORDER BY started_at"
+            ).fetchall()
+        ]
+
+    snapshot = budget.snapshot()
+    assert evidence
+    assert snapshot["cache_hits"]["pdf.download"] == 1
+    assert snapshot["counters"].get("pdf_downloads", 0) == 0
+    assert snapshot["counters"]["pdf_parses"] == 1
+    assert tool_names == ["pdf.download", "pdf.parse"]

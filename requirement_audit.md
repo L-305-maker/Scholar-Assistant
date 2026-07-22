@@ -11,6 +11,24 @@ Remaining gaps after supplementation:
 - ToolRegistry and BudgetManager exist but are still not central execution controls.
 - Real installed-BGE execution and MCP long-lived stdio startup remain unverified in this environment.
 
+## Phase 2 Status
+
+Phase 2 addressed the first three remaining implementation gaps and added explicit verification paths for the fourth:
+
+- Default Searcher now uses unified source adapters for arXiv, OpenAlex, Crossref, and Semantic Scholar when enabled in config.
+- Query/source results are normalized into source hits, stored with provenance, fused with source weights, then passed through BM25, optional BGE-M3 dense retrieval, optional reranker, and diversity selection.
+- Dedup now normalizes DOI, arXiv base ID, same-source IDs, titles, and author/year signals. Exact and strong fuzzy matches merge; possible duplicates are recorded without automatic merge; conflicting identifiers are not merged.
+- SQLite schema v2 adds source hits, retrieval provenance, work identifiers, aliases, duplicate candidates, tool executions, budget usage, and run manifests.
+- ToolRegistry now has permission levels, timeout/retry metadata, network domains, side-effect levels, and an async ToolExecutor. BudgetManager checks and records source calls, candidates, deep reads, retries, model/tool usage, cache hits, and MCP calls.
+- MCP stdio is now verified by an SDK-client smoke path that performs initialize, tools/list, consecutive calls, demo research, and clean shutdown.
+- BGE/reranker wrappers now expose configurable model names, cache_dir, device, batch size, max length, revision, CPU fallback, and timing metadata. Real model tests are marker-gated with `SCHOLAR_RUN_MODEL_TESTS=1`.
+
+Remaining after Phase 2:
+
+- Real BGE model download/execution was not run in the default verification path; use `uv sync --extra retrieval` and `SCHOLAR_RUN_MODEL_TESTS=1 uv run pytest -m model`.
+- Live external API tests remain opt-in with `SCHOLAR_RUN_LIVE_TESTS=1`; default tests are offline by design.
+- ToolRegistry/BudgetManager cover the main source/MCP/research path, but some internal PDF parse and report write calls are still direct local operations with budget counters rather than full ToolExecutor wrappers.
+
 ## Original Audit Conclusion
 
 The original codebase was a runnable MVP, but it did not fully satisfy the original requirement set. The largest gaps were dense retrieval integration, stricter evidence verification, required event coverage, richer Reader/Analyst behavior, and test coverage for several mandated edge cases.

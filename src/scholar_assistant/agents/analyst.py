@@ -52,7 +52,8 @@ class Analyst:
             )
             claims.append(claim)
 
-        if len(evidence_units) >= 2 and len(claims) < max_claims:
+        independent_work_ids = {evidence.work_id for evidence in evidence_units}
+        if len(independent_work_ids) >= 2 and len(claims) < max_claims:
             ev_ids = [
                 evidence.evidence_id for evidence in evidence_units[: min(4, len(evidence_units))]
             ]

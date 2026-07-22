@@ -10,6 +10,7 @@ Main layers:
 - `core/`: settings, events, state machine, quality gate, orchestrator, reports.
 - `providers/`: SDK-free OpenAI-compatible provider abstraction for DeepSeek/Kimi-style services.
 - `tools/`: arXiv/OpenAlex/Crossref/Semantic Scholar clients and PDF parser.
+- `tools/sources.py`: unified literature source adapters and source-hit normalization.
 - `retrieval/`: SQLite FTS5 BM25, optional BGE-M3, RRF, reranker fallback, diversity selection.
 - `storage/`: SQLite migrations, repositories, file helpers.
 - `agents/`: Searcher, Reader, Analyst, Verifier.
@@ -33,6 +34,7 @@ uv run scholar providers list
 uv run scholar exec --json --ephemeral "搜索相关论文"
 uv run scholar research "调研 LLM Agent 长期记忆中的检索噪声问题" --no-embeddings
 uv run scholar mcp-server --list-tools
+uv run python scripts/mcp_stdio_smoke.py
 ```
 
 ## Code Style
@@ -44,6 +46,7 @@ uv run scholar mcp-server --list-tools
 - Do not load BGE models at CLI startup.
 - Use Pydantic models for structured data boundaries.
 - Use SQLite migrations in `storage/migrations.py`; do not introduce Alembic for MVP.
+- Keep default tests offline; real API/model paths must remain marker-gated.
 
 ## Safety Rules
 
@@ -61,3 +64,5 @@ uv run scholar mcp-server --list-tools
 - The Quality Gate validates evidence links.
 - The Evidence Store decides whether a claim can be adopted.
 - Reports must show evidence labels and limitations.
+- Source provenance must be preserved when merging papers across arXiv, OpenAlex, Crossref, and Semantic Scholar.
+- Possible duplicates must be recorded without automatic merge unless conservative criteria are met.
