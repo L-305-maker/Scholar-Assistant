@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.00001v2</id>
+    <updated>2024-01-02T00:00:00Z</updated>
+    <published>2024-01-01T00:00:00Z</published>
+    <title>Memory Retrieval Noise in LLM Agents</title>
+    <summary>We study noisy memory retrieval in language model agents.</summary>
+    <author><name>Ada Example</name></author>
+    <arxiv:doi>10.1234/example</arxiv:doi>
+    <category term="cs.AI"/>
+    <link href="http://arxiv.org/abs/2401.00001v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2401.00001v2" rel="related" type="application/pdf"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2401.00002v1</id>
+    <updated>2024-01-03T00:00:00Z</updated>
+    <published>2024-01-03T00:00:00Z</published>
+    <title>RAG Noise Benchmarks for Agent Memory</title>
+    <summary>A benchmark for irrelevant context in retrieval augmented generation.</summary>
+    <author><name>Grace Example</name></author>
+    <category term="cs.CL"/>
+    <link href="http://arxiv.org/abs/2401.00002v1" rel="alternate" type="text/html"/>
+  </entry>
+</feed>

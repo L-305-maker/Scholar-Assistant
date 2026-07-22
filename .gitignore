@@ -1,0 +1,10 @@
+.vscode/
+.venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.env
+__pycache__/
+
+*.cache
+data/
